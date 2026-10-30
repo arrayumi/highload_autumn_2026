@@ -6,11 +6,13 @@ services:
       - "3001:3001"
     environment:
       - NODE_ENV=production
-      - PORT=3001
-      - POD_ID=pod-001
-      - DATACENTER=dc-001
+      - PORT=${PORT_DC1}
+      - POD_ID=${POD_ID_DC1}
+      - DATACENTER=${DATACENTER_DC1}
     networks:
-      - app-net
+      app-net:
+        aliases:
+          - crud-service
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 5s
@@ -26,11 +28,13 @@ services:
       - "3002:3001"
     environment:
       - NODE_ENV=production
-      - PORT=3001
-      - POD_ID=pod-002
-      - DATACENTER=dc-002
+      - PORT=${PORT_DC2}
+      - POD_ID=${POD_ID_DC2}
+      - DATACENTER=${DATACENTER_DC2}
     networks:
-      - app-net
+      app-net:
+        aliases:
+          - crud-service
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
       interval: 5s
@@ -105,10 +109,12 @@ services:
       - app-net
 
   load-generator:
-    image: ghcr.io/grafana/k6:latest
+    image: ghcr.io/grafana/k6:1.3.0
     command: run --vus 40 --duration 4h load.js
+    env_file:
+      - .env
     environment:
-      - TARGET_URL=http://crud-service-dc1:3001
+      - TARGET_URL=http://crud-service:3001
     volumes:
       - ./scripts:/scripts
     working_dir: /scripts

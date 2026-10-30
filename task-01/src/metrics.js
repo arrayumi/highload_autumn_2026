@@ -12,7 +12,7 @@ const requestLatencyHistogram = new client.Histogram({
   name: 'http_request_duration_seconds',
   help: 'Latency of HTTP requests in seconds',
   buckets: client.exponentialBuckets(0.005, 2, 16), // экспоненциальные бакеты: от 5 мс до ~320 сек
-  labelNames: ['method', 'route', 'code'],
+  labelNames: ['method', 'route', 'status_code'],
   labelValues: globalLabels
 });
 
@@ -20,7 +20,7 @@ const requestLatencyHistogram = new client.Histogram({
 const requestTotalCounter = new client.Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests',
-  labelNames: ['method', 'route', 'code'],
+  labelNames: ['method', 'route', 'status_code'],
   labelValues: globalLabels
 });
 
@@ -28,7 +28,7 @@ const requestTotalCounter = new client.Counter({
 const httpErrorsCounter = new client.Counter({
   name: 'http_errors_total',
   help: 'Total number of HTTP errors (4xx and 5xx)',
-  labelNames: ['method', 'route', 'code'],
+  labelNames: ['method', 'route', 'status_code'],
   labelValues: globalLabels
 });
 

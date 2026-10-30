@@ -1,54 +1,81 @@
-import { check } from 'k6';
 import http from 'k6/http';
+import { check } from 'k6';
 import { sleep } from 'k6';
 
-const baseUrl = __ENV.TARGET_URL || 'http://crud-service:3001';
+const BASE_URL = __ENV.TARGET_URL || 'http://crud-service:3001';
 
-const error500Rate = 0.02;
+const error500Rate = 0.005;
 const error404Rate = 0.03;
 const error400Rate = 0.01;
 
+const urls = [
+  { path: '/items', method: 'POST', body: { name: 'test', description: 'load test' } },
+  { path: '/items/1', method: 'GET' }, 
+  { path: '/items/2', method: 'GET' },
+  { path: '/items/1', method: 'PUT', body: { name: 'updated-test', description: 'updated' } },
+];
+
 export const options = {
-  vus: 40,
-  duration: '4h',
   stages: [
-    { duration: '3m', target: 40 },
+    { duration: '1m', target: 10 },
+    { duration: '2m', target: 30 },
+    { duration: '3m', target: 50 },
+    { duration: '10m', target: 50 },
   ],
 };
 
 export default function () {
+  const randomUrl = urls[Math.floor(Math.random() * urls.length)];
+  
+  let query = '';
   const r = Math.random();
-
   if (r < error500Rate) {
-    http.get(`${baseUrl}/items?forceError=500`);
+    query = '?forceError=500';
   } else if (r < error500Rate + error404Rate) {
-    http.get(`${baseUrl}/items/999999999`);
+    // Для 404 можно подставить несуществующий ID
+    query = '/999999';
   } else if (r < error500Rate + error404Rate + error400Rate) {
-    const res = http.post(`${baseUrl}/items`, JSON.stringify({}), {
+    // Для 400 — некорректный запрос (например, пустой POST или неверный JSON)
+    query = '?invalid=true';
+  }
+
+  // Формируем итоговый URL: базовый путь + (для 404 — заменяем путь, иначе — добавляем query)
+  let url;
+  if (query === '/999999') {
+    url = `${BASE_URL}${randomUrl.path.replace(/\/\d+$/, query)}`;
+  } else {
+    url = `${BASE_URL}${randomUrl.path}${query}`;
+  }
+
+  let resp;
+  if (randomUrl.method === 'POST') {
+    let payload = randomUrl.body;
+    if (query.includes('?invalid=true')) {
+      payload = {}; // невалидный payload для 400
+    }
+    resp = http.post(url, JSON.stringify(payload), {
       headers: { 'Content-Type': 'application/json' },
     });
-    // можно добавить проверку, если хочешь
-    check(res, { 'status is 400': (r) => r.status === 400 });
-  } else {
-    const path = Math.floor(Math.random() * 4);
-    switch (path) {
-      case 0:
-        http.get(`${baseUrl}/items`);
-        break;
-      case 1:
-        http.post(`${baseUrl}/items`, JSON.stringify({ name: 'test-item', description: 'test desc' }), {
-          headers: { 'Content-Type': 'application/json' }
-        });
-        break;
-      case 2:
-        http.get(`${baseUrl}/items/1`);
-        break;
-      case 3:
-        // в k6 нет http.delete как отдельного метода — используем http.request
-        http.request('DELETE', `${baseUrl}/items/1`);
-        break;
+  } else if (randomUrl.method === 'PUT') {
+    let payload = randomUrl.body;
+    if (query.includes('?invalid=true')) {
+      payload = {};
     }
+    resp = http.put(url, JSON.stringify(payload), {
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } else {
+    resp = http.get(url);
   }
+
+  check(resp, {
+    'status is expected': (r) => {
+      if (query.includes('?forceError=500')) return r.status === 500;
+      if (query === '/999999') return r.status === 404;
+      if (query.includes('?invalid=true')) return r.status === 400;
+      return r.status === 200 || r.status === 500; // допускаем 200 и 500 на обычных запросах
+    },
+  });
 
   sleep(0.1);
 }
