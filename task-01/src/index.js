@@ -1,74 +1,56 @@
+// server.js
 const express = require('express');
-const { requestLatencyHistogram, requestTotalCounter, httpErrorsCounter, metricsEndpoint } = require('./metrics');
+const client = require('prom-client');
+
 const app = express();
-const PORT = process.env.PORT || 3001;
+
+app.use((req, res, next) => {
+  if (req.query.forceError === '500') {
+    return res.status(500).json({ error: 'Artificial server error' });
+  }
+  next();
+});
 
 app.use(express.json());
 
-// In-memory хранилище
-const store = new Map();
-let nextId = 1;
-function generateId() { return String(nextId++); }
-
-// Middleware для сбора метрик (только для бизнес-ручек)
-function metricsMiddleware(req, res, next) {
-  const start = Date.now();
-  const route = req.path; // например, /items или /items/:id
-  const method = req.method;
-
-  // Сохраняем оригинальные методы send/json/status, чтобы корректно считать код ответа
-  const originalSend = res.send;
-  const originalJson = res.json;
-  const originalStatus = res.status;
-
-  let statusCode = 200;
-
-  res.status = (code) => {
-    statusCode = code;
-    return originalStatus.call(res, code);
-  };
-
-  res.send = (body) => {
-    recordMetrics(method, route, statusCode, start);
-    return originalSend.call(res, body);
-  };
-
-  res.json = (body) => {
-    recordMetrics(method, route, statusCode, start);
-    return originalJson.call(res, body);
-  };
-
-  next();
-}
-
-function recordMetrics(method, route, code, start) {
-  const durationSeconds = (Date.now() - start) / 1000;
-
-  // Считаем все запросы (для RPS)
-  requestTotalCounter.inc({ method, route, code });
-
-  // Если ошибка (4xx или 5xx), отдельно считаем в http_errors_total
-  if (code >= 400) {
-    httpErrorsCounter.inc({ method, route, code });
-  }
-
-  // Гистограмма latency для всех запросов (и успешных, и ошибочных)
-  requestLatencyHistogram.observe(durationSeconds, { method, route, code });
-}
-
-// Health check — без метрик (по требованию)
-app.get('/health', (req, res) => {
-  console.log('>>> Health called');
-  res.json({ status: 'ok', service: 'crud-service' });
+const register = client.register;
+const httpRequestsTotal = new client.Counter({
+  name: 'http_requests_total',
+  help: 'Total HTTP requests',
+  labelNames: ['method', 'endpoint', 'status_code'],
 });
 
-// Prometheus metrics endpoint — тоже без бизнес-метрик
-app.get('/metrics', metricsEndpoint);
+app.use((req, res, next) => {
+  const method = req.method;
+  const endpoint = req.path.split('/')[1] ? `/${req.path.split('/')[1]}` : '/';
+  res.on('finish', () => {
+    const statusCode = String(res.statusCode);
+    httpRequestsTotal.labels(method, endpoint, statusCode).inc();
+  });
+  next();
+});
 
-// Все остальные ручки — с метриками
-app.use(metricsMiddleware);
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', register.contentType);
+  res.end(await register.metrics());
+});
 
-// POST /items
+app.get('/health', (req, res) => {
+  res.status(200).send('ok');
+});
+
+const store = new Map();
+let nextId = 1;
+
+function generateId() {
+  return nextId++;
+}
+
+app.get('/items', (req, res) => {
+  const items = Array.from(store.values());
+  res.json(items);
+});
+
 app.post('/items', (req, res) => {
   const { name, description } = req.body;
   if (!name) {
@@ -80,44 +62,31 @@ app.post('/items', (req, res) => {
     name,
     description: description ?? null,
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
   };
   store.set(id, item);
   res.status(201).json(item);
 });
 
-// GET /items/:id
 app.get('/items/:id', (req, res) => {
-  const item = store.get(req.params.id);
+  const id = Number(req.params.id);
+  const item = store.get(id);
   if (!item) {
     return res.status(404).json({ error: 'Item not found' });
   }
   res.json(item);
 });
 
-// PUT /items/:id
-app.put('/items/:id', (req, res) => {
-  const existing = store.get(req.params.id);
-  if (!existing) {
+app.delete('/items/:id', (req, res) => {
+  const id = Number(req.params.id);
+  if (!store.has(id)) {
     return res.status(404).json({ error: 'Item not found' });
   }
-
-  const { name, description } = req.body;
-  if (name === undefined && description === undefined) {
-    return res.json(existing);
-  }
-
-  const updated = {
-    ...existing,
-    name: name !== undefined ? name : existing.name,
-    description: description !== undefined ? description : existing.description,
-    updatedAt: new Date().toISOString()
-  };
-
-  store.set(req.params.id, updated);
-  res.json(updated);
+  store.delete(id);
+  res.status(204).send();
 });
 
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`Service running on port ${PORT}`);
+  console.log(`Server started on port ${PORT}`);
 });

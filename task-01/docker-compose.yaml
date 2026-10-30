@@ -1,13 +1,34 @@
 services:
-  crud-service:
+  crud-service-dc1:
     build: .
-    container_name: crud-service
+    container_name: crud-service-dc1
     ports:
       - "3001:3001"
     environment:
+      - NODE_ENV=production
       - PORT=3001
       - POD_ID=pod-001
       - DATACENTER=dc-001
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  crud-service-dc2:
+    build: .
+    container_name: crud-service-dc2
+    ports:
+      - "3002:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - POD_ID=pod-002
+      - DATACENTER=dc-002
     networks:
       - app-net
     healthcheck:
@@ -36,12 +57,77 @@ services:
     networks:
       - app-net
     depends_on:
-      - crud-service
+      crud-service-dc1:
+        condition: service_started
+      crud-service-dc2:
+        condition: service_started
     restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.4.3
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      # Отключаем возможность редактирования, чтобы дашборды были non-editable
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana-provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana-provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    restart: unless-stopped
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks:
+      - app-net
+
+  dashboard-generator:
+    build:
+      context: .
+      dockerfile: Dockerfile-generator
+    container_name: dashboard-generator
+    environment:
+      - GRAFANA_URL=http://grafana:3000
+      - GRAFANA_USER=admin
+      - GRAFANA_PASS=admin
+    restart: "no"
+    depends_on:
+      grafana:
+        condition: service_started
+      crud-service-dc1:
+        condition: service_started
+      crud-service-dc2:
+        condition: service_started
+    networks:
+      - app-net
+
+  load-generator:
+    image: ghcr.io/grafana/k6:latest
+    command: run --vus 40 --duration 4h load.js
+    environment:
+      - TARGET_URL=http://crud-service-dc1:3001
+    volumes:
+      - ./scripts:/scripts
+    working_dir: /scripts
+    depends_on:
+      crud-service-dc1:
+        condition: service_started
+      crud-service-dc2:
+        condition: service_started
+      dashboard-generator:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+      - app-net
+
+
+volumes:
+  prometheus_data:
+  grafana_data:
 
 networks:
   app-net:
     driver: bridge
-
-volumes:
-  prometheus_data:
